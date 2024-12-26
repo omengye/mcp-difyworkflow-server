@@ -7,8 +7,12 @@ mcp-difyworkflow-server is an mcp server Tools application that implements the q
 ```shell
 git clone https://github.com/gotoolkis/mcp-difyworkflow-server.git
 
+# build by go
 cd mcp-difyworkflow-server
 go build .
+
+## or use make build
+make build
 ```
 
 ## Configuration
@@ -40,9 +44,9 @@ go build .
 
 ## Usage：
 
-- list_workflows
+- list_workflows<br>
   List authorized workflows
-- execute_workflow
+- execute_workflow<br>
   Execute a specified workflow,args: workflow_name, input
   Note: The input variable name of the **dify workflow** should be defined by default as: **"message"**
 
