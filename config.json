@@ -1,0 +1,12 @@
+{
+    "mcpServers": {
+      "mcp-difyworkflow-server": {
+        "command": "/Users/yyc/Documents/DevOps/mcp/mcp-difyworkflow-server/mcp-difyworkflow-server",
+        "args": ["-base-url","http://localhost/v1"],
+        "env": {
+          "DIFY_WORKFLOW_NAME":"workflow-searchNews,workflow-genImag",
+          "DIFY_API_KEYS":"apikey-xxxxxxxxxxx,apikey-xxxxxxxxxxx"
+         }
+      }
+    }
+}
