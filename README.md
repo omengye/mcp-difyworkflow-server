@@ -28,11 +28,14 @@ go build .
 }
 ```
 
-- "command":"mcp-difyworkflow-server"
-  You can specify the absolute path for the compiled binary, or create a symbolic link with:
+- **"command":"mcp-difyworkflow-server"**
+
+  You can specify the absolute path for the compiled binary, or create a symbolic link with:<br>
   "sudo ln -s <gitWorkPath>/mcp-difyworkflow-server /usr/local/bin/mcp-difyworkflow-server"
-- DIFY_WORKFLOW_NAME、DIFY_API_KEYS
-  Need to correspond one by one in order.
+
+- **DIFY_WORKFLOW_NAME、DIFY_API_KEYS**
+
+  Need to correspond one by one in order.<br>
   Workflow name can be self-defined by the user in the Prompt, and the Workflow API Key needs to be generated for the corresponding workflow created on the Dify platform (refer to the relevant Dify documentation for how to generate the API KEY).
 
 ## Usage：
@@ -43,10 +46,10 @@ go build .
   Execute a specified workflow,args: workflow_name, input
   Note: The input variable name of the **dify workflow** should be defined by default as: **"message"**
 
-- Samples:
+### Samples:
 
-> 查看 mcp-difyworkflow-server 可使用的工具列表
+> 查看 mcp-difyworkflow-server 可使用的工具列表<br>
 > 给我执行 dify 名为 workflow-translator 的工作流，输入的消息为“这是一条测试消息”
 
-> View the list of tools available for mcp-difyworkflow-server.
+> View the list of tools available for mcp-difyworkflow-server.<br>
 > Execute the workflow named 'workflow-translator' for me, the input message is "This is a test message".
