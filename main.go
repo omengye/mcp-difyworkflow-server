@@ -2,11 +2,9 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
-	"net/http"
+	"github.com/hb1707/dify-go-sdk/dify"
 	"os"
 	"strings"
 
@@ -27,7 +25,7 @@ func main() {
 		return
 	}
 	workflows := parseAPIKeys(apiKeys, workflowNames)
-	baseURL := flag.String("base-url", "http://localhostr/v1", "Base URL for Dify API")
+	baseURL := flag.String("base-url", "http://localhost/v1", "Base URL for Dify API")
 	flag.Parse()
 
 	s := server.NewMCPServer(
@@ -54,9 +52,15 @@ func main() {
 	)
 	s.AddTool(executeWorkflowTool, executeWorkflowHandler(workflows, *baseURL))
 
-	if err := server.ServeStdio(s); err != nil {
+	//if err := server.ServeStdio(s); err != nil {
+	//	fmt.Printf("Server error: %v\n", err)
+	//}
+
+	if err := server.NewSSEServer(s, server.WithBaseURL("http://127.0.0.1:8096")).Start("127.0.0.1:8096"); err != nil {
 		fmt.Printf("Server error: %v\n", err)
+		return
 	}
+
 }
 
 func parseAPIKeys(apiKeys, workflowNames string) map[string]string {
@@ -92,7 +96,7 @@ func executeWorkflowHandler(workflows map[string]string, baseURL string) func(ct
 		workflowName := request.Params.Arguments["workflow_name"].(string)
 		apiKey, ok := workflows[workflowName]
 		if !ok {
-			return mcp.NewToolResultError(fmt.Sprintf("Workflow %s not found", workflowName)), nil
+			return mcp.NewToolResultText(fmt.Sprintf("Workflow %s not found", workflowName)), nil
 		}
 
 		input := ""
@@ -102,49 +106,52 @@ func executeWorkflowHandler(workflows map[string]string, baseURL string) func(ct
 
 		response, err := callDifyWorkflowAPI(baseURL, apiKey, input)
 		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("Failed to execute workflow: %v", err)), nil
+			return mcp.NewToolResultText(fmt.Sprintf("Failed to execute workflow: %v", err)), nil
 		}
 
-		return mcp.NewToolResultText(response), nil
+		return response, nil
 	}
 }
 
-func callDifyWorkflowAPI(baseURL, apiKey, input string) (string, error) {
-	client := &http.Client{}
+func callDifyWorkflowAPI(baseURL, apiKey, input string) (*mcp.CallToolResult, error) {
 
-	body := fmt.Sprintf(`{
-		"inputs": {"message":"%s"},
-		"response_mode": "blocking",
-		"user": "mcp-server"
-	}`, input)
+	//ctx := context.Background()
+	//serv := server.ServerFromContext(ctx)
+	//serv.SendNotificationToClient(ctx, "", map[string]any{})
 
-	req, err := http.NewRequest("POST", fmt.Sprintf("%s/workflows/run", baseURL), strings.NewReader(body))
-	if err != nil {
-		return "", err
+	c := dify.NewClient(apiKey,
+		dify.WithBaseURL(baseURL),
+	)
+
+	req := dify.WorkflowRequest{
+		ResponseMode: "streaming",
+		Inputs: map[string]interface{}{
+			"query": input,
+		},
+		User: "mcp-user",
 	}
 
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
+	ch := make(chan interface{})
+	resp := &strings.Builder{}
+	go func() {
+		select {
+		case data := <-ch:
+			m := data.(map[string]interface{})
+			resp.WriteString(m["result"].(string))
+		}
+	}()
+	handler := &StreamMsgHandler{
+		ResultChan: ch,
 	}
-	defer resp.Body.Close()
-
-	respBody, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
+	if err := c.WorkflowRunStreaming(req, handler); err != nil {
+		return nil, err
 	}
-
-	var completionResponse DifyResponse
-	if err := json.Unmarshal(respBody, &completionResponse); err != nil {
-		return "", err
-	}
-
-	if completionResponse.Data.Status == "succeeded" {
-		return fmt.Sprintf("%s", completionResponse.Data.Outputs["text"]), nil
-	}
-
-	return "", fmt.Errorf("Workflow execution failed: %s", respBody)
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			mcp.TextContent{
+				Type: "text",
+				Text: resp.String(),
+			},
+		},
+	}, nil
 }
