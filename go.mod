@@ -4,7 +4,7 @@ go 1.23.3
 
 require (
 	github.com/hb1707/dify-go-sdk v0.1.0
-	github.com/mark3labs/mcp-go v0.14.1
+	github.com/mark3labs/mcp-go v0.18.0
 )
 
 require (

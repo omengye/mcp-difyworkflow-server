@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"github.com/hb1707/dify-go-sdk/dify"
@@ -12,6 +13,17 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
+type DifyApp struct {
+	ApiKey     string             `json:"apiKey"`
+	AppInfo    dify.AppInfo       `json:"appInfo"`
+	Parameters dify.AppParameters `json:"parameters"`
+}
+
+var (
+	DifyBaseUrl  string
+	DifyWorkflow map[string]*DifyApp = make(map[string]*DifyApp)
+)
+
 func main() {
 	apiKeys := os.Getenv("DIFY_API_KEYS")
 	if apiKeys == "" {
@@ -19,14 +31,14 @@ func main() {
 		return
 	}
 
-	workflowNames := os.Getenv("DIFY_WORKFLOW_NAME")
-	if workflowNames == "" {
-		fmt.Println("DIFY_WORKFLOW_NAME environment variable is required")
-		return
-	}
-	workflows := parseAPIKeys(apiKeys, workflowNames)
 	baseURL := flag.String("base-url", "http://localhost/v1", "Base URL for Dify API")
 	flag.Parse()
+
+	DifyBaseUrl = *baseURL
+	if err := parseAPIKeys(apiKeys); err != nil {
+		fmt.Printf("parse dify workflow error: %v\n", err)
+		return
+	}
 
 	s := server.NewMCPServer(
 		"Dify Workflow Server",
@@ -35,22 +47,33 @@ func main() {
 		server.WithLogging(),
 	)
 
-	listWorkflowsTool := mcp.NewTool("list_workflows",
-		mcp.WithDescription("List authorized workflows"),
-	)
-	s.AddTool(listWorkflowsTool, listWorkflowsHandler(workflows))
+	for _, difyApp := range DifyWorkflow {
+		inputSchema := mcp.ToolInputSchema{}
+		for _, input := range difyApp.Parameters.UserInputForm {
+			for k, v := range input {
+				inputSchema.Type = k
+				paramInfo := v.(map[string]interface{})
+				propertyName := paramInfo["variable"].(string)
+				if inputSchema.Properties == nil {
+					inputSchema.Properties = make(map[string]interface{})
+				}
+				inputSchema.Properties[propertyName] = map[string]interface{}{
+					"type":        k,
+					"description": paramInfo["label"].(string),
+				}
+				if paramInfo["required"] != nil {
+					inputSchema.Required = append(inputSchema.Required, propertyName)
+				}
+			}
+		}
 
-	executeWorkflowTool := mcp.NewTool("execute_workflow",
-		mcp.WithDescription("Execute a specified workflow"),
-		mcp.WithString("workflow_name",
-			mcp.Required(),
-			mcp.Description("Name of the workflow to execute"),
-		),
-		mcp.WithString("input",
-			mcp.Description("Input data for the workflow"),
-		),
-	)
-	s.AddTool(executeWorkflowTool, executeWorkflowHandler(workflows, *baseURL))
+		workflowsTool := mcp.Tool{
+			Name:        difyApp.AppInfo.Name,
+			Description: difyApp.AppInfo.Description,
+			InputSchema: inputSchema,
+		}
+		s.AddTool(workflowsTool, executeWorkflowHandler())
+	}
 
 	//if err := server.ServeStdio(s); err != nil {
 	//	fmt.Printf("Server error: %v\n", err)
@@ -63,48 +86,51 @@ func main() {
 
 }
 
-func parseAPIKeys(apiKeys, workflowNames string) map[string]string {
-	workflows := make(map[string]string)
+func parseAPIKeys(apiKeys string) error {
 
 	apiKeyList := strings.Split(apiKeys, ",")
-	workflowNameList := strings.Split(workflowNames, ",")
 
-	if len(apiKeyList) != len(workflowNameList) {
-		fmt.Printf("The number of API Keys does not match the number of workflow names\n")
-		os.Exit(1)
-	}
-
-	for i, name := range workflowNameList {
-		workflows[name] = apiKeyList[i]
-	}
-
-	return workflows
-}
-
-func listWorkflowsHandler(workflows map[string]string) func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		workflowNames := make([]string, 0, len(workflows))
-		for name := range workflows {
-			workflowNames = append(workflowNames, name)
+	for _, apiKey := range apiKeyList {
+		c := dify.NewClient(apiKey,
+			dify.WithBaseURL(DifyBaseUrl),
+		)
+		info, err := c.GetAppInfo()
+		if err != nil {
+			fmt.Printf("GetAppInfo error: %v\n", err)
+			return err
 		}
-		return mcp.NewToolResultText(fmt.Sprintf("Authorized workflows: %v", workflowNames)), nil
+		parameters, err := c.GetAppParameters()
+		if err != nil {
+			fmt.Printf("GetAppParameters error: %v\n", err)
+			return err
+		}
+		DifyWorkflow[info.Name] = &DifyApp{
+			ApiKey:     apiKey,
+			AppInfo:    *info,
+			Parameters: *parameters,
+		}
 	}
+
+	return nil
 }
 
-func executeWorkflowHandler(workflows map[string]string, baseURL string) func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func executeWorkflowHandler() func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		workflowName := request.Params.Arguments["workflow_name"].(string)
-		apiKey, ok := workflows[workflowName]
+		workflowName := request.Params.Name
+		difyApp, ok := DifyWorkflow[workflowName]
 		if !ok {
 			return mcp.NewToolResultText(fmt.Sprintf("Workflow %s not found", workflowName)), nil
 		}
-
-		input := ""
-		if in, ok := request.Params.Arguments["input"].(string); ok {
-			input = in
+		inputs := make(map[string]interface{})
+		for _, forms := range difyApp.Parameters.UserInputForm {
+			for _, v := range forms {
+				paramInfo := v.(map[string]interface{})
+				propertyName := paramInfo["variable"].(string)
+				inputs[propertyName] = request.Params.Arguments[propertyName]
+			}
 		}
 
-		response, err := callDifyWorkflowAPI(baseURL, apiKey, input)
+		response, err := callDifyWorkflowAPI(difyApp, inputs)
 		if err != nil {
 			return mcp.NewToolResultText(fmt.Sprintf("Failed to execute workflow: %v", err)), nil
 		}
@@ -113,22 +139,16 @@ func executeWorkflowHandler(workflows map[string]string, baseURL string) func(ct
 	}
 }
 
-func callDifyWorkflowAPI(baseURL, apiKey, input string) (*mcp.CallToolResult, error) {
+func callDifyWorkflowAPI(difyApp *DifyApp, input map[string]interface{}) (*mcp.CallToolResult, error) {
 
-	//ctx := context.Background()
-	//serv := server.ServerFromContext(ctx)
-	//serv.SendNotificationToClient(ctx, "", map[string]any{})
-
-	c := dify.NewClient(apiKey,
-		dify.WithBaseURL(baseURL),
+	c := dify.NewClient(difyApp.ApiKey,
+		dify.WithBaseURL(DifyBaseUrl),
 	)
 
 	req := dify.WorkflowRequest{
 		ResponseMode: "streaming",
-		Inputs: map[string]interface{}{
-			"query": input,
-		},
-		User: "mcp-user",
+		Inputs:       input,
+		User:         "mcp-user",
 	}
 
 	ch := make(chan interface{})
@@ -137,7 +157,11 @@ func callDifyWorkflowAPI(baseURL, apiKey, input string) (*mcp.CallToolResult, er
 		select {
 		case data := <-ch:
 			m := data.(map[string]interface{})
-			resp.WriteString(m["result"].(string))
+			if str, err := json.Marshal(m); err != nil {
+				return
+			} else {
+				resp.WriteString(string(str))
+			}
 		}
 	}()
 	handler := &StreamMsgHandler{
